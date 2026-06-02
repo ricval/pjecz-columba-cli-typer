@@ -5,13 +5,17 @@ description = "Anunciador de la recepción. Para vocear las audiencias. Es un CL
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "fastapi>=0.136.3",
+    "httpx>=0.28.1",
     "piper-tts>=1.4.2",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.13.1",
     "pyttsx3>=2.99",
+    "redis>=8.0.0",
     "requests>=2.33.1",
     "rich>=14.3.3",
     "typer>=0.24.1",
+    "uvicorn>=0.48.0",
 ]
 
 [tool.black]
