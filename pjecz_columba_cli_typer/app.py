@@ -2,13 +2,28 @@
 PJECZ Columba CLI Typer App
 """
 
+import asyncio
+import json
+import os
 import subprocess
 import tempfile
+import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
+import requests
+import uvicorn
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from pydantic import BaseModel
+from pydantic_settings import BaseSettings
+from redis import asyncio as aioredis
 from rich.console import Console
 from rich.table import Table
-from typer import Exit, Option, Typer
+from typer import Argument, Exit, Option, Typer
+
+load_dotenv()
 
 app = Typer(help="Vocero de la recepción.")
 
@@ -39,6 +54,30 @@ VOCES = {
 MODELOS_DIR = Path.home() / ".local" / "share" / "piper-voices"
 
 
+# -------------
+# Configuración
+# -------------
+
+
+class Settings(BaseSettings):
+    """Settings"""
+
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    SERVIR_HOST: str = os.getenv("SERVIR_HOST", "0.0.0.0")
+    SERVIR_PORT: int = int(os.getenv("SERVIR_PORT", "8080"))
+    VOZ: str = os.getenv("VOZ", "es_MX-claude-high")
+    VOCEAR_COLA: str = os.getenv("VOCEAR_COLA", "vocear:pendientes")
+    VOCEAR_ITEM_PREFIJO: str = os.getenv("VOCEAR_ITEM_PREFIJO", "vocear:item:")
+    VOCEAR_TTL: int = int(os.getenv("VOCEAR_TTL", "120"))  # TTL por defecto en segundos
+
+
+configuracion = Settings()
+
+# ---------
+# Funciones
+# ---------
+
+
 def _listar_sinks() -> list[dict]:
     """Lista los sinks de audio disponibles."""
     console = Console()
@@ -67,8 +106,8 @@ def _elegir_voz(nombre_voz: str) -> tuple[Path, Path]:
     if nombre_voz not in VOCES:
         console.print(f"[yellow]Voz '{nombre_voz}' no encontrada.[/yellow] Usa 'voces' para ver opciones.")
         raise Exit(1)
-    onnx_path = Path(MODELOS_DIR, VOCES[nombre_voz]["onnx"])
-    json_path = Path(MODELOS_DIR, VOCES[nombre_voz]["json"])
+    onnx_path = MODELOS_DIR / VOCES[nombre_voz]["onnx"]
+    json_path = MODELOS_DIR / VOCES[nombre_voz]["json"]
     if not onnx_path.exists() or not json_path.exists():
         console.print(f"[yellow]Modelo '{nombre_voz}' no encontrado en {MODELOS_DIR}.[/yellow]")
         raise Exit(1)
@@ -121,6 +160,97 @@ def _sintetizar_wav(texto: str, onnx: Path, velocidad: float) -> Path:
     return wav_path
 
 
+# -----------
+# App FastAPI
+# -----------
+
+
+class Atencion(BaseModel):
+    """Esquema para recibir una atención."""
+
+    id: int
+    mensaje: str
+    tiempo: str  # ISO 8601
+    ttl_segundos: int = configuracion.VOCEAR_TTL
+
+
+def vocear_texto(texto: str) -> None:
+    """Función bloqueante para sintetizar y reproducir texto."""
+    onnx, _ = _elegir_voz(configuracion.VOZ)
+    wav = _sintetizar_wav(texto, onnx, velocidad=1.0)
+    _reproducir(wav, dispositivo=None)  # Sink por defecto
+
+
+async def worker_voz(redis: aioredis.Redis, stop_event: asyncio.Event):
+    """Worker que escucha la cola de voz en Redis y reproduce los mensajes."""
+    console = Console()
+    console.print("[green]Worker de voz iniciado.[/green]")
+    while not stop_event.is_set():
+        # BRPOP bloquea hasta 1s; permite revisar stop periódicamente.
+        res = await redis.brpop([configuracion.VOCEAR_COLA], timeout=1)
+        if res is None:
+            continue
+        _, item_key = res
+        crudo = await redis.get(item_key)
+        if crudo is None:
+            continue  # Expiró por TTL antes de vocearse: se descarta.
+        datos = json.loads(crudo)
+        await redis.delete(item_key)
+        # Piper/pw-cat son bloqueantes: a un hilo para no congelar el loop.
+        try:
+            await asyncio.to_thread(vocear_texto, datos["mensaje"])
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Error al vocear texto:[/red] {exc}")
+    console.print("[yellow]Worker de voz detenido.[/yellow]")
+
+
+def crear_app_fastapi() -> FastAPI:
+    """Crea la app FastAPI para el servidor de voz."""
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Inicializa recursos al iniciar y los limpia al cerrar."""
+        app.state.redis = aioredis.from_url(configuracion.REDIS_URL, decode_responses=True)
+        app.state.stop = asyncio.Event()
+        app.state.worker = asyncio.create_task(worker_voz(app.state.redis, app.state.stop))
+        try:
+            yield
+        finally:
+            app.state.stop.set()
+            await app.state.worker
+            await app.state.redis.aclose()
+
+    fastapi_app = FastAPI(
+        title="Columba API",
+        description="API para el vocero de la recepción.",
+        lifespan=lifespan,
+    )
+
+    @fastapi_app.post("/hablar")
+    async def hablar_api(atencion: Atencion):
+        """Endpoint para recibir atenciones para hablar."""
+        redis: aioredis.Redis = fastapi_app.state.redis
+        item_key = f"{configuracion.VOCEAR_ITEM_PREFIJO}{uuid.uuid4().hex}"
+        payload = json.dumps(
+            {
+                "id": atencion.id,
+                "mensaje": atencion.mensaje,
+                "tiempo": atencion.tiempo,
+                "ttl_segundos": atencion.ttl_segundos,
+            }
+        )
+        await redis.set(item_key, payload, ex=configuracion.VOCEAR_TTL)
+        await redis.lpush(configuracion.VOCEAR_COLA, item_key)
+        return {"success": True, "message": f"Item: {item_key}"}
+
+    return fastapi_app
+
+
+# --------
+# Comandos
+# --------
+
+
 @app.command()
 def voces():
     """Lista las voces en español disponibles para Piper."""
@@ -162,7 +292,7 @@ def hablar(
         help="Nombre del sink (usa 'listar'). Sin valor usa el sink por defecto.",
     ),
     voz: str = Option(
-        "es_MX-claude-high",
+        configuracion.VOZ,
         "--voz",
         "-z",
         help="Voz Piper a usar (usa 'voces' para ver opciones).",
@@ -180,6 +310,43 @@ def hablar(
     onnx, _ = _elegir_voz(voz)
     wav = _sintetizar_wav(texto, onnx, velocidad)
     _reproducir(wav, dispositivo)
+
+
+@app.command()
+def servir(
+    host: str = Option(configuracion.SERVIR_HOST, help="Interfaz de red a escuchar."),
+    puerto: int = Option(configuracion.SERVIR_PORT, help="Puerto a escuchar."),
+):
+    """Inicia el servidor FastAPI para recibir atenciones."""
+    console = Console()
+    console.print("[green]Iniciando servidor FastAPI...[/green]")
+    uvicorn.run(crear_app_fastapi(), host=host, port=puerto, log_level="info")
+
+
+@app.command()
+def enviar(
+    id: int = Argument(..., help="ID de la atención."),
+    mensaje: str = Argument(..., help="Mensaje a hablar."),
+    tiempo: str = Option(datetime.now().isoformat(), help="Tiempo de la atención (ISO 8601)."),
+    ttl: int = Option(configuracion.VOCEAR_TTL, help="TTL en segundos para el mensaje."),
+):
+    """Envía una atención al servidor de voz."""
+    console = Console()
+    payload = {
+        "id": id,
+        "mensaje": mensaje,
+        "tiempo": tiempo,
+        "ttl_segundos": ttl,
+    }
+    try:
+        response = requests.post(f"http://{configuracion.SERVIR_HOST}:{configuracion.SERVIR_PORT}/hablar", json=payload)
+        if response.status_code == 200:
+            console.print("[green]Atención enviada exitosamente.[/green]")
+        else:
+            console.print(f"[red]Error al enviar atención:[/red] {response.text}")
+    except ImportError:
+        console.print("[red]requests no instalado.[/red] Instálalo con: pip install requests")
+        raise Exit(1)
 
 
 if __name__ == "__main__":
