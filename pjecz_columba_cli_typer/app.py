@@ -28,7 +28,6 @@ load_dotenv()
 app = Typer(help="Vocero de la recepción.")
 
 # Voces disponibles en Piper para español
-# Fuente: https://huggingface.co/rhasspy/piper-voices
 VOCES = {
     "es_MX-claude-high": {
         "onnx": "es_MX-claude-high.onnx",
@@ -267,7 +266,7 @@ def voces():
 
 @app.command()
 def listar():
-    """Lista los dispositivos de audio disponibles (sinks via pactl)."""
+    """Lista los dispositivos de audio disponibles (sinks)."""
     console = Console()
     sinks = _listar_sinks()
     if not sinks:
@@ -338,15 +337,11 @@ def enviar(
         "tiempo": tiempo,
         "ttl_segundos": ttl,
     }
-    try:
-        response = requests.post(f"http://{configuracion.SERVIR_HOST}:{configuracion.SERVIR_PORT}/hablar", json=payload)
-        if response.status_code == 200:
-            console.print("[green]Atención enviada exitosamente.[/green]")
-        else:
-            console.print(f"[red]Error al enviar atención:[/red] {response.text}")
-    except ImportError:
-        console.print("[red]requests no instalado.[/red] Instálalo con: pip install requests")
-        raise Exit(1)
+    response = requests.post(f"http://{configuracion.SERVIR_HOST}:{configuracion.SERVIR_PORT}/hablar", json=payload)
+    if response.status_code == 200:
+        console.print("[green]Atención enviada exitosamente.[/green]")
+    else:
+        console.print(f"[red]Error al enviar atención:[/red] {response.text}")
 
 
 if __name__ == "__main__":
