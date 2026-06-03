@@ -5,17 +5,10 @@ Voceador de la recepción.
 ## Requerimientos
 
 - Python 3.14 o superior
-- Piper
 - Piper Utils
 - Pulseaudio Utils
 
 ## Instalación
-
-Instalar Piper (para Fedora Linux)
-
-```bash
-sudo pip install piper-tts
-```
 
 Instalar Piper Utils (para Fedora Linux)
 
@@ -169,8 +162,8 @@ Arrancar el servidor FastAPI para recibir las peticiones de vocear:
 cli servir
 ```
 
-Enviar una petición a la API para vocear un texto:
+Enviar una petición a la API para vocear un texto (id enetero y el mensaje a vocear):
 
 ```bash
-cli enviar 'Buenas noches'
+cli enviar 12 'Buenas noches'
 ```
