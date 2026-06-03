@@ -1,7 +1,7 @@
 [project]
 name = "pjecz-columba-cli-typer"
 version = "0.1.0"
-description = "Anunciador de la recepción. Para vocear las audiencias. Es un CLI hecho con Python Typer."
+description = "Voceador de la recepción."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
