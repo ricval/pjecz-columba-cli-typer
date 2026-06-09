@@ -65,9 +65,12 @@ class Settings(BaseSettings):
     SERVIR_HOST: str = os.getenv("SERVIR_HOST", "0.0.0.0")
     SERVIR_PORT: int = int(os.getenv("SERVIR_PORT", "8080"))
     VOZ: str = os.getenv("VOZ", "es_MX-claude-high")
+    VOZ_VELOCIDAD: float = float(os.getenv("VOZ_VELOCIDAD", "1.0"))
     VOCEAR_COLA: str = os.getenv("VOCEAR_COLA", "vocear:pendientes")
     VOCEAR_ITEM_PREFIJO: str = os.getenv("VOCEAR_ITEM_PREFIJO", "vocear:item:")
-    VOCEAR_TTL: int = int(os.getenv("VOCEAR_TTL", "120"))  # TTL por defecto en segundos
+    VOCEAR_REPETIR_PREFIJO: str = os.getenv("VOCEAR_REPETIR_PREFIJO", "vocear:repetir:")
+    VOCEAR_REPETIR_CADA: int = int(os.getenv("VOCEAR_REPETIR_CADA", "30"))  # Cantidad de segundos entre repeticiones
+    VOCEAR_TTL: int = int(os.getenv("VOCEAR_TTL", "120"))  # Cantidad de segundos que permanece una Atención en Redis
 
 
 configuracion = Settings()
@@ -173,10 +176,16 @@ class Atencion(BaseModel):
     ttl_segundos: int = configuracion.VOCEAR_TTL
 
 
+class AtencionQuitar(BaseModel):
+    """Esquema para quitar una atención."""
+
+    id: int
+
+
 def vocear_texto(texto: str) -> None:
     """Función bloqueante para sintetizar y reproducir texto."""
     onnx, _ = _elegir_voz(configuracion.VOZ)
-    wav = _sintetizar_wav(texto, onnx, velocidad=1.0)
+    wav = _sintetizar_wav(texto, onnx, configuracion.VOZ_VELOCIDAD)
     _reproducir(wav, dispositivo=None)  # Sink por defecto
 
 
@@ -203,6 +212,27 @@ async def worker_voz(redis: aioredis.Redis, stop_event: asyncio.Event):
     console.print("[yellow]Worker de voz detenido.[/yellow]")
 
 
+async def worker_repetir(redis: aioredis.Redis, stop_event: asyncio.Event):
+    """Worker que encola periódicamente las Atenciones repetibles hasta que expiren su TTL."""
+    console = Console()
+    console.print("[green]Worker de repetición iniciado.[/green]")
+    while not stop_event.is_set():
+        async for repeat_key in redis.scan_iter(f"{configuracion.VOCEAR_REPETIR_PREFIJO}*"):
+            crudo = await redis.get(repeat_key)
+            if crudo is None:
+                continue  # Expiró por TTL: ya no se repite.
+            item_key = f"{configuracion.VOCEAR_ITEM_PREFIJO}{uuid.uuid4().hex}"
+            # TTL corto: solo necesita sobrevivir hasta que el worker_voz lo consuma.
+            await redis.set(item_key, crudo, ex=configuracion.VOCEAR_REPETIR_CADA)
+            await redis.lpush(configuracion.VOCEAR_COLA, item_key)
+        # Espera el intervalo o sale inmediatamente si se pide detener.
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=configuracion.VOCEAR_REPETIR_CADA)
+        except asyncio.TimeoutError:
+            pass
+    console.print("[yellow]Worker de repetición detenido.[/yellow]")
+
+
 def crear_app_fastapi() -> FastAPI:
     """Crea la app FastAPI para el servidor de voz."""
 
@@ -212,11 +242,13 @@ def crear_app_fastapi() -> FastAPI:
         app.state.redis = aioredis.from_url(configuracion.REDIS_URL, decode_responses=True)
         app.state.stop = asyncio.Event()
         app.state.worker = asyncio.create_task(worker_voz(app.state.redis, app.state.stop))
+        app.state.worker_repetir = asyncio.create_task(worker_repetir(app.state.redis, app.state.stop))
         try:
             yield
         finally:
             app.state.stop.set()
             await app.state.worker
+            await app.state.worker_repetir
             await app.state.redis.aclose()
 
     fastapi_app = FastAPI(
@@ -241,6 +273,38 @@ def crear_app_fastapi() -> FastAPI:
         await redis.set(item_key, payload, ex=configuracion.VOCEAR_TTL)
         await redis.lpush(configuracion.VOCEAR_COLA, item_key)
         return {"success": True, "message": f"Item: {item_key}"}
+
+    @fastapi_app.post("/agregar")
+    async def agregar_api(atencion: Atencion):
+        """Endpoint para agregar una atencion que se va repetir. Si el ID ya existe, se omite."""
+        redis: aioredis.Redis = fastapi_app.state.redis
+        repeat_key = f"{configuracion.VOCEAR_REPETIR_PREFIJO}{atencion.id}"
+        if await redis.exists(repeat_key):
+            return {"success": False, "message": f"ID {atencion.id} ya existe, se omite."}
+        payload = json.dumps(
+            {
+                "id": atencion.id,
+                "mensaje": atencion.mensaje,
+                "tiempo": atencion.tiempo,
+                "ttl_segundos": atencion.ttl_segundos,
+            }
+        )
+        await redis.set(repeat_key, payload, ex=atencion.ttl_segundos)
+        # Hablar de inmediato sin esperar el primer ciclo de repetición.
+        item_key = f"{configuracion.VOCEAR_ITEM_PREFIJO}{uuid.uuid4().hex}"
+        await redis.set(item_key, payload, ex=configuracion.VOCEAR_REPETIR_CADA)
+        await redis.lpush(configuracion.VOCEAR_COLA, item_key)
+        return {"success": True, "message": f"Atención {atencion.id} agregada para repetición."}
+
+    @fastapi_app.post("/quitar")
+    async def quitar_api(atencion_quitar: AtencionQuitar):
+        """Endpoint para quitar una atencion, para que se deje de repetir."""
+        redis: aioredis.Redis = fastapi_app.state.redis
+        repeat_key = f"{configuracion.VOCEAR_REPETIR_PREFIJO}{atencion_quitar.id}"
+        deleted = await redis.delete(repeat_key)
+        if deleted:
+            return {"success": True, "message": f"Atención {atencion_quitar.id} eliminada."}
+        return {"success": False, "message": f"ID {atencion_quitar.id} no encontrado."}
 
     return fastapi_app
 
