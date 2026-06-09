@@ -69,12 +69,15 @@ Crear un archivo `.env` en la raíz del proyecto para cambiar los valores por de
 
 ```env
 REDIS_URL=redis://localhost:6379/0
-SERVIR_HOST=0.0.0.0
-SERVIR_PORT=8080
-VOZ=es_MX-claude-high
-VOCEAR_COLA=vocear:pendientes
-VOCEAR_ITEM_PREFIJO=vocear:item:
-VOCEAR_TTL=120
+SERVIR_HOST=0.0.0.0                     # FastAPI escuchará en todas las interfaces de red
+SERVIR_PORT=8080                        # FastAPI escuchará en este puerto
+VOZ=es_MX-claude-high                   # Voz a utilizar (debe coincidir con el nombre del archivo .onnx sin la extensión)
+VOZ_VELOCIDAD=1.0                       # Velocidad de la voz (0.5 = mitad de velocidad, 2.0 = el doble de velocidad)
+VOCEAR_COLA=vocear:pendientes           # Nombre de la cola en Redis
+VOCEAR_ITEM_PREFIJO=vocear:item:        # Prefijo para los items en Redis
+VOCEAR_REPETIR_PREFIJO=vocear:repetir:  # Prefijo para los items de repetición en Redis
+VOCEAR_REPETIR_CADA=30                  # Segundos entre repeticiones
+VOCEAR_TTL=120                          # Tiempo de vida de cada item en segundos
 ```
 
 Crear un archivo `.bashrc` en la raíz del proyecto para cargar las variables de entorno al activar el entorno virtual:
@@ -103,8 +106,11 @@ then
     echo "   SERVIR_HOST: ${SERVIR_HOST}"
     echo "   SERVIR_PORT: ${SERVIR_PORT}"
     echo "   VOZ: ${VOZ}"
+    echo "   VOZ_VELOCIDAD: ${VOZ_VELOCIDAD}"
     echo "   VOCEAR_COLA: ${VOCEAR_COLA}"
     echo "   VOCEAR_ITEM_PREFIJO: ${VOCEAR_ITEM_PREFIJO}"
+    echo "   VOCEAR_REPETIR_PREFIJO: ${VOCEAR_REPETIR_PREFIJO}"
+    echo "   VOCEAR_REPETIR_CADA: ${VOCEAR_REPETIR_CADA}"
     echo "   VOCEAR_TTL: ${VOCEAR_TTL}"
     echo
 fi
@@ -162,7 +168,7 @@ Arrancar el servidor FastAPI para recibir las peticiones de vocear:
 cli servir
 ```
 
-Enviar una petición a la API para vocear un texto (id enetero y el mensaje a vocear):
+Enviar una petición a la API para vocear un texto (ID entero y el mensaje a vocear):
 
 ```bash
 cli enviar 12 'Buenas noches'
