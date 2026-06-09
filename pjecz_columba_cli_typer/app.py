@@ -290,10 +290,10 @@ def crear_app_fastapi() -> FastAPI:
             }
         )
         await redis.set(repeat_key, payload, ex=atencion.ttl_segundos)
-        # Hablar de inmediato sin esperar el primer ciclo de repetición.
-        item_key = f"{configuracion.VOCEAR_ITEM_PREFIJO}{uuid.uuid4().hex}"
-        await redis.set(item_key, payload, ex=configuracion.VOCEAR_REPETIR_CADA)
-        await redis.lpush(configuracion.VOCEAR_COLA, item_key)
+        # DESACTIVADO: Hablar de inmediato sin esperar el primer ciclo de repetición
+        # item_key = f"{configuracion.VOCEAR_ITEM_PREFIJO}{uuid.uuid4().hex}"
+        # await redis.set(item_key, payload, ex=configuracion.VOCEAR_REPETIR_CADA)
+        # await redis.lpush(configuracion.VOCEAR_COLA, item_key)
         return {"success": True, "message": f"Atención {atencion.id} agregada para repetición."}
 
     @fastapi_app.post("/quitar")
