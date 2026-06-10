@@ -37,7 +37,7 @@ source .venv/bin/activate
 Instalar dependencias con `uv`
 
 ```bash
-uv install
+uv sync
 ```
 
 Crear el directorio para los modelos de voz de Piper
@@ -56,7 +56,7 @@ Descargar los modelos de voz (archivos `.onnx` y `.onnx.json`) desde [HuggingFac
     - es_MX-claude-high
     - es_MX-ald-medium
 
-Moverlos al directorio de Piper
+Moverlos al directorio para los modelos de voz de Piper
 
 ```bash
 mv es_*.onnx ~/.local/share/piper-voices/
