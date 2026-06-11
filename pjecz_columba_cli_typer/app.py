@@ -290,10 +290,10 @@ def crear_app_fastapi() -> FastAPI:
             }
         )
         await redis.set(repeat_key, payload, ex=atencion.ttl_segundos)
-        # DESACTIVADO: Hablar de inmediato sin esperar el primer ciclo de repetición
-        # item_key = f"{configuracion.VOCEAR_ITEM_PREFIJO}{uuid.uuid4().hex}"
-        # await redis.set(item_key, payload, ex=configuracion.VOCEAR_REPETIR_CADA)
-        # await redis.lpush(configuracion.VOCEAR_COLA, item_key)
+        # Hablar de inmediato sin esperar el primer ciclo de repetición
+        item_key = f"{configuracion.VOCEAR_ITEM_PREFIJO}{uuid.uuid4().hex}"
+        await redis.set(item_key, payload, ex=configuracion.VOCEAR_REPETIR_CADA)
+        await redis.lpush(configuracion.VOCEAR_COLA, item_key)
         return {"success": True, "message": f"Atención {atencion.id} agregada para repetición."}
 
     @fastapi_app.post("/quitar")
@@ -304,7 +304,8 @@ def crear_app_fastapi() -> FastAPI:
         deleted = await redis.delete(repeat_key)
         if deleted:
             return {"success": True, "message": f"Atención {atencion_quitar.id} eliminada."}
-        return {"success": False, "message": f"ID {atencion_quitar.id} no encontrado."}
+        # Si no se encuentra, no se hace nada, simplemente entrega el success en True y el mensaje de que no se encontró
+        return {"success": True, "message": f"ID {atencion_quitar.id} no encontrado."}
 
     return fastapi_app
 
