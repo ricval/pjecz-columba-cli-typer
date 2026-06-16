@@ -279,8 +279,7 @@ def crear_app_fastapi() -> FastAPI:
         """Endpoint para agregar una atencion que se va repetir. Si el ID ya existe, se omite."""
         redis: aioredis.Redis = fastapi_app.state.redis
         repeat_key = f"{configuracion.VOCEAR_REPETIR_PREFIJO}{atencion.id}"
-        if await redis.exists(repeat_key):
-            return {"success": False, "message": f"ID {atencion.id} ya existe, se omite."}
+        # Preparar el payload
         payload = json.dumps(
             {
                 "id": atencion.id,
@@ -289,6 +288,11 @@ def crear_app_fastapi() -> FastAPI:
                 "ttl_segundos": atencion.ttl_segundos,
             }
         )
+        # Si el ID ya existe, se va actualizar
+        if await redis.exists(repeat_key):
+            await redis.set(repeat_key, payload, ex=atencion.ttl_segundos)
+            return {"success": True, "message": f"Atención {atencion.id} actualizada."}
+        # Si el ID no existe, se crea un nuevo registro
         await redis.set(repeat_key, payload, ex=atencion.ttl_segundos)
         # Hablar de inmediato sin esperar el primer ciclo de repetición
         item_key = f"{configuracion.VOCEAR_ITEM_PREFIJO}{uuid.uuid4().hex}"
