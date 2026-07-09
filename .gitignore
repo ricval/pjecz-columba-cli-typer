@@ -208,3 +208,7 @@ __marimo__/
 
 # Bash rc script
 .bashrc
+.zshrc
+
+# UV lock
+uv.lock
