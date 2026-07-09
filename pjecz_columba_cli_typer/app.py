@@ -217,7 +217,14 @@ async def worker_repetir(redis: aioredis.Redis, stop_event: asyncio.Event):
     console = Console()
     console.print("[green]Worker de repetición iniciado.[/green]")
     while not stop_event.is_set():
-        async for repeat_key in redis.scan_iter(f"{configuracion.VOCEAR_REPETIR_PREFIJO}*"):
+        repeat_keys = [key async for key in redis.scan_iter(f"{configuracion.VOCEAR_REPETIR_PREFIJO}*")]
+        if repeat_keys:
+            # Antes de repetir las Atenciones pendientes, se vocea la palabra ATENCIÓN.
+            atencion_key = f"{configuracion.VOCEAR_ITEM_PREFIJO}{uuid.uuid4().hex}"
+            atencion_payload = json.dumps({"mensaje": "¡ATENCIÓN!. "})
+            await redis.set(atencion_key, atencion_payload, ex=configuracion.VOCEAR_REPETIR_CADA)
+            await redis.lpush(configuracion.VOCEAR_COLA, atencion_key)
+        for repeat_key in repeat_keys:
             crudo = await redis.get(repeat_key)
             if crudo is None:
                 continue  # Expiró por TTL: ya no se repite.
@@ -254,6 +261,7 @@ def crear_app_fastapi() -> FastAPI:
     fastapi_app = FastAPI(
         title="Columba API",
         description="API para el vocero de la recepción.",
+        version="1.2.0",
         lifespan=lifespan,
     )
 
